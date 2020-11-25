@@ -276,34 +276,3 @@ for (q in seq(0, 1, 0.0001)){
 
 
 ```
-
-```{r reed frost 2, echo=FALSE}
-## The model:
-# - An individual is exposed to an infectious individual.
-# - This individual is infected and undergoes a latent period of sim.E = 9 days before becoming infectious.
-# - This individual, once infectious, begins to show symptoms (prodromes) after 1 day.
-# - The prodromal period (denoted by x) is the time between prodromes first appearing and the onset of rash. This varies between individuals but from our data we can take an average and use this as an assumed value for x in our simulation.
-# - Following the onset of rash, there is a period of d = 3 days until recovery, unless death occurs.
-
-## We assume that the 1 indiviual infected initially is on the first day of being INFECTIVE, so they have 1 day until symptoms (prodromes) begin to show, and are then infectious for a period of x + d days.
-
-## FINDING A VALUE FOR x:
-
-# Take a mean value of the prodromal period for all members of the dataset who did not die from the disease whilst infectious; they would have a shorter prodromal period and so would make our value less accurate.
-
-death_times = hagelloch$tDEAD
-death_times[is.na(death_times)] = 0
-
-recovery_times = hagelloch$tR
-
-infected_times = hagelloch$tI
-
-prodromal = recovery_times - infected_times - death_times
-
-prodromal_periods = prodromal[prodromal > 0]
-
-x <- mean(prodromal_periods)
-
-## x is found to be equal to 7.968398. We will round this to 8 for simplicity and consistency with the integer parameter values found in the rest of the model
-
-```
