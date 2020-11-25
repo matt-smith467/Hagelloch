@@ -1,0 +1,309 @@
+---
+title: "Reed-Frost Simulations"
+author: "Matthew Smith"
+date: "17/11/2020"
+output: html_document
+---
+
+## Setup
+
+Load required libraries.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("surveillance")
+library(mgcv)
+library(numDeriv)
+library(gdata)
+```
+
+Import data.
+
+```{r include=FALSE}
+data("hagelloch")
+hagelloch = hagelloch.df
+```
+
+## Functions
+
+Functions are defined here for use later in the project.
+
+# Observed states for individuals over time
+
+This function generates a matrix tracking the infectious states of each individuals over time based on values for the latent period e, time after infection until the infectious period begins k, and recovery time d.
+
+0 = person susceptible
+1 = person exposed
+2 = person infectious
+3 = person recovered
+
+```{r observed states over time, echo=FALSE}
+obs.states_over_time = function(e, k, d, function_data){
+
+  exposure_time <- function_data$tPRO - k - e
+  infectious_time <- function_data$tPRO - k
+  removed_time <- function_data$tERU + d
+  days <- ceiling(max(removed_time))
+  
+  output = matrix(NA, 188, days + 1)
+  
+  for (i in 1:188){
+    day_exposed = max(exposure_time[i], 0)
+    day_infectious = max(infectious_time[i], 0)
+    day_removed = max(removed_time[i], 0)
+    
+    output[i, 1:(floor(day_exposed)+1)] = 0
+    output[i, (ceiling(day_exposed)+1):(floor(day_infectious)+1)] = 1
+    output[i, (ceiling(day_infectious)+1):(floor(day_removed)+1)] = 2
+    output[i, (ceiling(day_removed)+1):(days+1)] = 3
+    }
+
+
+  return(output)
+}
+
+```
+
+# Reed-Frost simulation
+
+This function carries out a Reed-Frost simulation with input parameters e, k, d, x, p and data. The function first finds the intial conditions for the simulation using the function obs.states_over_time (ie how many individuals should be intially susceptible, infectious, exposed and removed from the data) and then carries it out once.
+
+```{r reed frost functions, echo=FALSE}
+
+reed_frost = function(e, k, d, x, p, max.day, function_data, plot = TRUE){
+  
+  # Find states of individuals over time
+  
+  obs.states = obs.states_over_time(e, k, d, function_data)
+  
+  days = dim(obs.states)[2]
+  
+  num = dim(obs.states)[1]
+
+  sim.S <- rep(0, max.day)
+
+  sim.E <- rep(0, max.day)
+  
+  sim.I <- rep(0, max.day)
+
+  sim.R <- rep(0, max.day)
+  
+  # Find initial conditions
+  
+  for (i in 1:num){
+    if (obs.states[i,1] == 1){
+      sim.E[which(1 == obs.states[i,])] = sim.E[which(1 == obs.states[i,])] + 1
+      sim.I[which(2 == obs.states[i,])] = sim.I[which(2 == obs.states[i,])] + 1
+      sim.R[which(3 == obs.states[i,])] = sim.R[which(3 == obs.states[i,])] + 1
+    }
+    
+    if (obs.states[i,1] == 2){
+      sim.I[which(2 == obs.states[i,])] = sim.I[which(2 == obs.states[i,])] + 1
+      sim.R[which(3 == obs.states[i,])] = sim.R[which(3 == obs.states[i,])] + 1
+    }
+    
+    if (obs.states[i,1] == 3){
+      sim.R[which(3 == obs.states[i,])] = sim.R[which(3 == obs.states[i,])] + 1
+    }
+  }
+  
+  sim.S = num - sim.E - sim.I - sim.R
+  
+  # Initialise probability
+  
+  q = 1-p
+
+  sim.E.daily = vector()
+
+  # Carry out simulation
+
+  for (i in 2:max.day){
+    exposed <- rbinom(1, sim.S[i-1], 1-(q^sim.I[i-1]))
+    sim.E.daily = c(sim.E.daily, exposed)
+    sim.E[i:(i+e)] = sim.E[i:(i+e)] + exposed
+    sim.I[(i+e+1):(i+e+1 + x+d+1)] = sim.I[(i+e+1):(i+e+1 + x+d+1)] + exposed
+    sim.R[(i+e+1 + x+d+1 + 1): max.day] = sim.R[(i+e+1 + x+d+1 + 1): max.day] + exposed 
+    sim.S = num - sim.E - sim.I - sim.R
+    
+    # Break conditions (when everybody has recovered)
+    
+    if (sim.R[i] == num){
+      break
+    }
+  }
+  
+  sim.S = sim.S[1:i]
+  sim.E = sim.E[1:i]
+  sim.I = sim.I[1:i]
+  sim.R = sim.R[1:i]
+  
+  sim.E.daily = sim.E.daily[1:i]
+  sim.E.daily[i] = 0
+  
+  # Plot graph
+  
+  if (plot == TRUE){
+  
+    plot(sim.S, type = "l", col = "green", xlab = "Time (days)", ylab = "Number of individuals", main = paste("Simulated infectious states of individuals over time with p = ", p, sep = ""))
+    lines(sim.E, col = "orange")
+    lines(sim.I, col = "red")
+    lines(sim.R, col = "blue")
+    abline(h=0, lty = 2)
+    abline(h=num, lty = 2)
+    grid()
+    legend(70, 125, legend=c("susceptible", "exposed", "infectious", "removed"), col = c("green", "orange", "red", "blue"), lty = c(1, 1), cex = 0.9)
+  }
+  
+  return_matrix = cbind(sim.S, sim.E, sim.I, sim.R, sim.E.daily)
+  return(return_matrix)
+
+}
+
+plot1 = reed_frost(9, 1, 3, 8, 0.0059, 200, hagelloch)
+```
+
+# Reed Frost Repeat
+
+This function repeats the Reed-Frost simulation n times and optionally produces 4 boxplot graphs (one for each of S, E, I and R) of infectious states over time for the n simulations.
+
+```{r, echo=FALSE, fig.height=9}
+reed_frost_repeat = function(e, k, d, x, p, max.day, function_data, n, individual.plot = FALSE, group.plot = TRUE, box.plot = TRUE){
+  
+  sim.S_by_day = vector()
+  sim.E_by_day = vector()
+  sim.I_by_day = vector()
+  sim.R_by_day = vector()
+  
+  obs.data_for_plot = obs.SEIR_plot(function_data = function_data, e = e, k = k, d = d, SEIR.plot = FALSE)
+  
+  
+  if (group.plot == TRUE){
+    plot(0, type = "l", col = "green", xlab = "Time (days)", ylab = "Number of individuals", main = paste("Simulated mean infectious states of individuals over time with p = ", p, " and ", n, " trials.", sep = ""), xlim = c(0, dim(obs.data_for_plot)[1]), ylim = c(0, dim(function_data)[1]))
+    abline(h=0, lty = 2)
+    abline(h=dim(function_data)[1], lty = 2)
+    grid()
+    legend(70, 125, legend=c("susceptible", "exposed", "infectious", "removed"), col = c("green", "orange", "red", "blue"), lty = c(1, 1), cex = 0.9)
+
+  }
+  
+  for (i in 1:n){
+    results = reed_frost(e, k, d, x, p, max.day = max.day, function_data = function_data, plot = individual.plot)
+  
+    S_repeat = results[,1]
+    E_repeat = results[,2]
+    I_repeat = results[,3]
+    R_repeat = results[,4]
+    
+    if (group.plot == TRUE){
+      lines(S_repeat, col = "green")
+      lines(E_repeat, col = "orange")
+      lines(I_repeat, col = "red")
+      lines(R_repeat, col = "blue")
+      
+      lines(obs.data_for_plot[,1])
+      lines(obs.data_for_plot[,2])
+      lines(obs.data_for_plot[,3])
+      lines(obs.data_for_plot[,4])
+    }
+    
+    sim.S_by_day = cbindX(as.matrix(sim.S_by_day), as.matrix(S_repeat))
+    sim.E_by_day = cbindX(as.matrix(sim.E_by_day), as.matrix(E_repeat))
+    sim.I_by_day = cbindX(as.matrix(sim.I_by_day), as.matrix(I_repeat))
+    sim.R_by_day = cbindX(as.matrix(sim.R_by_day), as.matrix(R_repeat))
+  
+  }
+  
+  if (box.plot == TRUE){
+  
+    boxplot(t(sim.S_by_day), col = "green")
+    lines(obs.data_for_plot[,1])
+    boxplot(t(sim.E_by_day), col = "orange")
+    lines(obs.data_for_plot[,2])
+    boxplot(t(sim.I_by_day), col = "red")
+    lines(obs.data_for_plot[,3])
+    boxplot(t(sim.R_by_day), col = "blue")
+    lines(obs.data_for_plot[,4])
+  
+  }
+  
+  
+  
+  return(rbind(sim.S_by_day, sim.E_by_day, sim.I_by_day, sim.R_by_day)[,-1])
+  
+}
+
+test_function = reed_frost_repeat(e = 9, k = 1, d = 3, x = 8, p = 0.0059, max.day = 200, function_data = hagelloch, n = 100)
+```
+
+# Likelihood function
+
+```{r, echo=FALSE}
+
+obs.data = obs.SEIR_plot(function_data = hagelloch, e = 9, k = 1, d = 3, SEIR.plot = FALSE)
+likelihood_function = function(q, obs.data, e, k, d){
+  likelihood = 1
+  
+  susceptible_day_i = obs.data[,1]
+  
+
+  added_exposed = obs.data[,5]
+ 
+  infectious_day_i = obs.data[,3]
+  
+  i = 1
+  while (susceptible_day_i[i] > 0 && infectious_day_i[i] > 0){
+    S = susceptible_day_i[i]
+    E = added_exposed[i+1]
+    I = infectious_day_i[i]
+    
+    likelihood = likelihood * dbinom(E, S, 1-q^I, log = FALSE)
+    #print(dbinom(E, S, 1-q^I, log = TRUE))
+    #likelihood_vec = c(likelihood_vec, likelihood)
+    i = i + 1
+  }
+  #plot(likelihood_vec, type = "l")
+  #print(likelihood)
+  return(likelihood)
+}
+
+#likelihood_function(0.01, exposed_each_day, susceptible_day_i, infected_day_i)
+
+l_vec = vector()
+for (q in seq(0, 1, 0.0001)){
+  l = likelihood_function(q, obs.data, 9, 1, 3)
+  l_vec = c(l_vec, l)
+}
+
+
+```
+
+```{r reed frost 2, echo=FALSE}
+## The model:
+# - An individual is exposed to an infectious individual.
+# - This individual is infected and undergoes a latent period of sim.E = 9 days before becoming infectious.
+# - This individual, once infectious, begins to show symptoms (prodromes) after 1 day.
+# - The prodromal period (denoted by x) is the time between prodromes first appearing and the onset of rash. This varies between individuals but from our data we can take an average and use this as an assumed value for x in our simulation.
+# - Following the onset of rash, there is a period of d = 3 days until recovery, unless death occurs.
+
+## We assume that the 1 indiviual infected initially is on the first day of being INFECTIVE, so they have 1 day until symptoms (prodromes) begin to show, and are then infectious for a period of x + d days.
+
+## FINDING A VALUE FOR x:
+
+# Take a mean value of the prodromal period for all members of the dataset who did not die from the disease whilst infectious; they would have a shorter prodromal period and so would make our value less accurate.
+
+death_times = hagelloch$tDEAD
+death_times[is.na(death_times)] = 0
+
+recovery_times = hagelloch$tR
+
+infected_times = hagelloch$tI
+
+prodromal = recovery_times - infected_times - death_times
+
+prodromal_periods = prodromal[prodromal > 0]
+
+x <- mean(prodromal_periods)
+
+## x is found to be equal to 7.968398. We will round this to 8 for simplicity and consistency with the integer parameter values found in the rest of the model
+
+```
